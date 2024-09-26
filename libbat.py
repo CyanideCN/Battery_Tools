@@ -66,6 +66,14 @@ class CellManager(object):
             data_list.append(df)
         return data_list, flist
 
+def _get_capacity_units(df):
+    headers = df.columns
+    for h in headers:
+        if h.startswith('Capacity'):
+            return h
+    else:
+        raise ValueError('No capacity column')
+
 
 class RateCapability(object):
 
@@ -78,20 +86,11 @@ class RateCapability(object):
         self.cat_mass = cat_mass
         self.c_rate = c_rate
         self._dchg_step = dchg_step
-        self._cap_col = self._get_capacity_units(dfs[0])
+        self._cap_col = _get_capacity_units(dfs[0])
 
         self.cycle_data = list()
         for df in dfs:
             self.cycle_data.append(split_df(df, step_idx_col))
-
-    @staticmethod
-    def _get_capacity_units(df):
-        headers = df.columns
-        for h in headers:
-            if h.startswith('Capacity'):
-                return h
-        else:
-            raise ValueError('No capacity column')
 
     def discharge_profile(self, data_idx=0):
         profiles = list()
@@ -115,3 +114,36 @@ class RateCapability(object):
         if self.cell_id is not None:
             df.columns = self.cell_id
         return df
+
+
+class Cycling(object):
+
+    def __init__(self, df, step_idx_col='Step Number'):
+        self.cycle_data = split_df(df, step_idx_col)
+        self._cap_col = _get_capacity_units(df)
+        self.chg_capacity = None
+        self.dchg_capacity = None
+        self._chg_dchg_capacity()
+
+    def _chg_dchg_capacity(self):
+        chg_cap = list()
+        dchg_cap = list()
+        _chg_this_cycle = 0
+        _dchg_this_cycle = 0
+        cycle_num = self.cycle_data[0]['Cycle Index'].iloc[0]
+        for cy_df in self.cycle_data:
+            print(cycle_num)
+            _cycle_num = cy_df['Cycle Index'].iloc[0]
+            if cycle_num != _cycle_num:
+                chg_cap.append(_chg_this_cycle)
+                dchg_cap.append(_dchg_this_cycle)
+                _chg_this_cycle = 0
+                _dchg_this_cycle = 0
+                cycle_num = _cycle_num
+            _step_name = cy_df['Step Type'].iloc[0]
+            if _step_name.endswith(' DChg'):
+                _dchg_this_cycle += cy_df[self._cap_col].iloc[-1]
+            elif _step_name.endswith(' Chg'):
+                _chg_this_cycle += cy_df[self._cap_col].iloc[-1]
+        self.chg_capacity = np.array(chg_cap)
+        self.dchg_capacity = np.array(dchg_cap)
