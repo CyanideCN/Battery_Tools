@@ -1,5 +1,7 @@
 import os
 import glob
+import re
+
 import numpy as np
 import pandas as pd
 import yadg
@@ -52,7 +54,8 @@ class CellManager(object):
         files = self.match_files(directory, suffix_pattern + '.xlsx')
         flist = sorted(files)
         dfs = [pd.read_excel(i, sheet_name=2) for i in flist]
-        return dfs, flist
+        cids = [self._parse_cell_id(i) for i in flist]
+        return dfs, cids
 
     def load_ec_eis(self, directory, suffix_pattern=''):
         files = self.match_files(directory, suffix_pattern + 'PEIS*.mpr')
@@ -64,7 +67,30 @@ class CellManager(object):
             df['Re(Z)'] = data['Re(Z)']
             df['-Im(Z)'] = data['-Im(Z)']
             data_list.append(df)
-        return data_list, flist
+        cids = [self._parse_cell_id(i) for i in flist]
+        return data_list, cids
+    
+    def _parse_cell_id(self, raw_str):
+        fname = os.path.split(raw_str)[1]
+        if fname.startswith(self.prefix):
+            fn_strip = fname.lstrip(self.prefix)
+            if fn_strip[0] in ['-', '_']:
+                batch_num = ''
+                for chars in fn_strip[1:]:
+                    if chars.isdigit():
+                        batch_num += chars
+                    else:
+                        break
+                return f'{self.prefix}-{batch_num}'
+        return None
+
+class CellMetadata(object):
+
+    def __init__(self, data_path):
+        self.data = pd.read_csv(data_path, index_col=0)
+
+    def get(self, cell_id, key):
+        return self.data[key][cell_id]
 
 def _get_capacity_units(df):
     headers = df.columns
@@ -77,13 +103,19 @@ def _get_capacity_units(df):
 
 class RateCapability(object):
 
-    def __init__(self, dfs, cat_mass, c_rate, cell_id=None,
+    def __init__(self, dfs, c_rate, cat_mass=None, cell_id=None, metadata=None,
                  step_idx_col='Step Number', dchg_step='CC DChg'):
         self.n_data = len(dfs)
         self.cell_id = cell_id
-        if len(cat_mass) != self.n_data:
+        if cat_mass is None:
+            if cell_id and metadata:
+                self.cat_mass = metadata.get(cell_id, 'Active_Mass').values
+            else:
+                raise ValueError('Cathod mass is missing')
+        else:
+            self.cat_mass = cat_mass
+        if len(self.cat_mass) != self.n_data:
             raise ValueError('Data length mismatch')
-        self.cat_mass = cat_mass
         self.c_rate = c_rate
         self._dchg_step = dchg_step
         self._cap_col = _get_capacity_units(dfs[0])
@@ -132,7 +164,6 @@ class Cycling(object):
         _dchg_this_cycle = 0
         cycle_num = self.cycle_data[0]['Cycle Index'].iloc[0]
         for cy_df in self.cycle_data:
-            print(cycle_num)
             _cycle_num = cy_df['Cycle Index'].iloc[0]
             if cycle_num != _cycle_num:
                 chg_cap.append(_chg_this_cycle)
@@ -147,3 +178,6 @@ class Cycling(object):
                 _chg_this_cycle += cy_df[self._cap_col].iloc[-1]
         self.chg_capacity = np.array(chg_cap)
         self.dchg_capacity = np.array(dchg_cap)
+
+    def capacity_retention(self, skip=1):
+        return self.dchg_capacity[skip:] / self.dchg_capacity[skip]
